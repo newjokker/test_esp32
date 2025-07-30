@@ -1,111 +1,108 @@
-
+#include <Arduino.h>
 #include <WiFi.h>
-#include <WebServer.h> 
-WebServer server(80); 
+#include <WebServer.h>
+#include <SPIFFS.h>
 
-const char* ssid = "SATURN_CONFIG";  
-const char* password = "Tuxingkeji.8888"; 
+WebServer server(80);
 
-void handleRoot() {
-  String html = R"rawliteral(
-  <!DOCTYPE html>
-  <html>
-  <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>ESP32-S3 控制面板</title>
-    <style>
-      body { font-family: Arial; text-align: center; margin: 0 auto; padding: 20px; }
-      .button {
-        padding: 10px 20px;
-        font-size: 16px;
-        margin: 10px;
-        cursor: pointer;
-        background-color: #4CAF50;
-        color: white;
-        border: none;
-        border-radius: 5px;
-      }
-      .button-off { background-color: #f44336; }
-      .status { font-size: 18px; margin-top: 20px; }
-    </style>
-  </head>
-  <body>
-    <h1>ESP32-S3 控制面板</h1>
-    <p>欢迎使用ESP32-S3 Web控制界面</p>
-    
-    <div>
-      <button class="button" onclick="controlLED('on')">打开 LED</button>
-      <button class="button button-off" onclick="controlLED('off')">关闭 LED</button>
-    </div>
-    
-    <div class="status" id="ledStatus">LED 状态: 未知</div>
-    
-    <script>
-      function controlLED(state) {
-        fetch('/led?state=' + state)
-          .then(response => response.text())
-          .then(data => {
-            document.getElementById('ledStatus').innerText = 'LED 状态: ' + data;
-          });
-      }
-      
-      // 初始加载时获取LED状态
-      window.onload = function() {
-        fetch('/ledStatus')
-          .then(response => response.text())
-          .then(data => {
-            document.getElementById('ledStatus').innerText = 'LED 状态: ' + data;
-          });
-      };
-    </script>
-  </body>
-  </html>
-  )rawliteral";
-  
-  server.send(200, "text/html; charset=UTF-8", html);
-}
-
-void handleLED() {
-  if (server.arg("state") == "on") {
-    digitalWrite(LED_BUILTIN, HIGH);
-    server.send(200, "text/plain", "ON");
-  } else {
-    digitalWrite(LED_BUILTIN, LOW);
-    server.send(200, "text/plain", "OFF");
-  }
-}
-
-void handleLEDStatus() {
-  if (digitalRead(LED_BUILTIN)) {
-    server.send(200, "text/plain", "ON");
-  } else {
-    server.send(200, "text/plain", "OFF");
-  }
-}
+const char* ssid = "SATURN_CONFIG";
+const char* password = "Tuxingkeji.8888";
 
 void setup() {
   Serial.begin(115200);
+
+  // 初始化 SPIFFS（带详细日志）
+  Serial.println("正在初始化SPIFFS...");
+  if (!SPIFFS.begin(true)) {
+    Serial.println("SPIFFS挂载失败！可能原因：");
+    Serial.println("1. 文件系统未上传");
+    Serial.println("2. 文件系统损坏");
+    Serial.println("3. 分区表配置错误");
+    while (1);
+  }
   
+  Serial.println("SPIFFS挂载成功！");
+  Serial.println("文件系统内容：");
+  
+  // 列出SPIFFS中的所有文件
+  File root = SPIFFS.open("/");
+  File file = root.openNextFile();
+  bool foundIndex = false;
+  
+  while(file){
+    Serial.printf("找到文件: %s (大小: %d字节)\n", file.name(), file.size());
+    if(String(file.name()) == "/index.html") {
+      foundIndex = true;
+    }
+    file = root.openNextFile();
+  }
+  
+  if(!foundIndex) {
+    Serial.println("警告：未找到index.html文件！");
+  } else {
+    Serial.println("已找到index.html文件");
+  }
+
   pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN, LOW); // 初始关闭LED
-  
+  digitalWrite(LED_BUILTIN, LOW);
+
+  // 连接 WiFi
   WiFi.begin(ssid, password);
+  Serial.print("正在连接WiFi...");
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
-  
-  Serial.println("\nWiFi连接成功!");
+  Serial.println("\nWiFi连接成功");
   Serial.print("IP地址: ");
   Serial.println(WiFi.localIP());
 
-  server.on("/", handleRoot);                   // 绑定根路径
-  server.on("/led", handleLED);                 // 绑定LED控制路径
-  server.on("/ledStatus", handleLEDStatus);     // 新增：获取LED状态
-  server.begin();                               // 启动服务器
+  // 路由设置
+  server.on("/", HTTP_GET, []() {
+    Serial.println("接收到根路径请求");
+    File file = SPIFFS.open("/index.html");
+    if (!file) {
+      Serial.println("错误：无法打开index.html");
+      server.send(500, "text/plain", "Failed to load HTML file");
+      return;
+    }
+    Serial.println("正在发送index.html文件");
+    server.streamFile(file, "text/html");
+    file.close();
+  });
+
+  server.on("/led", HTTP_GET, []() {
+    String state = server.arg("state");
+    Serial.printf("接收到LED控制请求: state=%s\n", state.c_str());
+    if (state == "on") {
+      digitalWrite(LED_BUILTIN, HIGH);
+      server.send(200, "text/plain", "ON");
+    } else {
+      digitalWrite(LED_BUILTIN, LOW);
+      server.send(200, "text/plain", "OFF");
+    }
+  });
+
+  server.on("/ledStatus", HTTP_GET, []() {
+    String status = digitalRead(LED_BUILTIN) ? "ON" : "OFF";
+    Serial.printf("LED状态查询: %s\n", status);
+    server.send(200, "text/plain", status);
+  });
+
+  server.on("/systemInfo", HTTP_GET, []() {
+    Serial.println("系统信息查询");
+    String json = "{";
+    json += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
+    json += "\"rssi\":\"" + String(WiFi.RSSI()) + "\"";
+    json += "}";
+    server.send(200, "application/json", json);
+  });
+
+  // 启动服务器
+  server.begin();
+  Serial.println("HTTP服务器已启动");
 }
 
 void loop() {
-  server.handleClient(); // 处理客户端请求
+  server.handleClient();
 }
-
