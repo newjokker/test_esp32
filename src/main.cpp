@@ -8,8 +8,38 @@ WebServer server(80);
 const char* ssid = "SATURN_CONFIG";
 const char* password = "Tuxingkeji.8888";
 
+void debugFS() {
+  if(!SPIFFS.begin(true)){
+    Serial.println("格式化SPIFFS...");
+    SPIFFS.format();
+  }
+  
+  File root = SPIFFS.open("/");
+  Serial.println("强制列出所有文件：");
+  File file = root.openNextFile();
+  while(file){
+    Serial.printf(">> 文件名: %s\n", file.name());
+    Serial.printf(">> 大小: %d bytes\n", file.size());
+    
+    // 打印文件前16字节内容（HEX格式）
+    uint8_t buf[16];
+    size_t len = file.read(buf, sizeof(buf));
+    Serial.print(">> 头部: ");
+    for(size_t i=0; i<len; i++){
+      Serial.printf("%02X ", buf[i]);
+    }
+    Serial.println("\n------------------------");
+    file.close();
+    file = root.openNextFile();
+  }
+}
+
 void setup() {
+
   Serial.begin(115200);
+
+  Serial.println("开始文件系统诊断...");
+  debugFS();
 
   // 初始化 SPIFFS（带详细日志）
   Serial.println("正在初始化SPIFFS...");
@@ -30,8 +60,8 @@ void setup() {
   bool foundIndex = false;
   
   while(file){
-    Serial.printf("找到文件: %s (大小: %d字节)\n", file.name(), file.size());
-    if(String(file.name()) == "/index.html") {
+    Serial.printf("找到文件: /%s (大小: %d字节)\n", file.name(), file.size());
+    if(String(file.name()) == "index.html") {
       foundIndex = true;
     }
     file = root.openNextFile();
@@ -60,7 +90,7 @@ void setup() {
   // 路由设置
   server.on("/", HTTP_GET, []() {
     Serial.println("接收到根路径请求");
-    File file = SPIFFS.open("/index.html");
+    File file = SPIFFS.open("index.html");
     if (!file) {
       Serial.println("错误：无法打开index.html");
       server.send(500, "text/plain", "Failed to load HTML file");
